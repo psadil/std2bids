@@ -45,7 +45,7 @@ async def flow(
     bulk: Path,
     dst: Path,
     key: Path,
-    max_workers: int = 2,
+    max_workers: int = 1,
     do_participants: bool = True,
     super_dataset: dapi.Dataset | None = None,
 ):
