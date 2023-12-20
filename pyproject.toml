@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "std2bids"
+dynamic = ["version"]
+description = ''
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = []
+authors = [{ name = "Patrick Sadil", email = "psadil@gmail.com" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = ["datalad", "polars", "pydantic", "requests", "reorganizer"]
+
+[project.urls]
+Documentation = "https://github.com/unknown/std2bids#readme"
+Issues = "https://github.com/unknown/std2bids/issues"
+Source = "https://github.com/unknown/std2bids"
+
+[project.scripts]
+ukb-to-bids = "std2bids.flows.ukb:main"
+
+[tool.hatch.version]
+path = "src/std2bids/__about__.py"
+
+[tool.hatch.envs.default]
+dependencies = ["coverage[toml]>=6.5", "pytest"]
+[tool.hatch.envs.default.scripts]
+test = "pytest {args:tests}"
+test-cov = "coverage run -m pytest {args:tests}"
+cov-report = ["- coverage combine", "coverage report"]
+cov = ["test-cov", "cov-report"]
+
+[[tool.hatch.envs.all.matrix]]
+python = ["3.11", "3.12"]
+
+[tool.hatch.envs.types]
+dependencies = ["mypy>=1.0.0"]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/std2bids tests}"
+
+[tool.coverage.run]
+source_pkgs = ["std2bids", "tests"]
+branch = true
+parallel = true
+omit = ["src/std2bids/__about__.py"]
+
+[tool.coverage.paths]
+std2bids = ["src/std2bids", "*/std2bids/src/std2bids"]
+tests = ["tests", "*/std2bids/tests"]
+
+[tool.coverage.report]
+exclude_lines = ["no cov", "if __name__ == .__main__.:", "if TYPE_CHECKING:"]
