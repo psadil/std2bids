@@ -11,10 +11,19 @@ from datalad import api as dapi
 from std2bids.models import ukb as ukb_models
 
 # TODO: confirm that updates will work as expected (download new files, unpack, bidsify, keep clean history)
-# TODO: decide about whether to use superdataset
 
 
 def get_bulk(d: pl.DataFrame) -> dict[int, list[ukb_models.DataField]]:
+    """Convert UKB data into a format closer to the bulk file format
+
+    Args:
+        d: The biobank in a long format. Each row should be a participant, with
+            the bulk fields stored in column "value", whose entries are lists of strings
+
+    Returns:
+        dict: The same data. Each key is a participant and each value is a list of the bulk
+        fields that are available for that participant.
+    """
     datafields = {}
     for eid in d.to_dicts():
         bulk = []
@@ -48,7 +57,18 @@ async def flow(
     max_workers: int = 1,
     do_participants: bool = True,
     super_dataset: dapi.Dataset | None = None,
+    max_participants: float = float("inf"),
 ):
+    """Main workflow
+
+    Args:
+        bulk (Path): _description_
+        dst (Path): _description_
+        key (Path): _description_
+        max_workers (int, optional): _description_. Defaults to 1.
+        do_participants (bool, optional): _description_. Defaults to True.
+        super_dataset (dapi.Dataset | None, optional): _description_. Defaults to None.
+    """
     d = get_ukb(bulk)
     datafields = get_bulk(d)
     fetcher = ukb_models.UKBFetcher(max_workers=max_workers, key=key)
@@ -67,7 +87,7 @@ async def flow(
             )
             tg.create_task(participant.do())
 
-            if i > 9:
+            if i >= max_participants:
                 break
 
     if do_participants:
@@ -99,6 +119,12 @@ def main():
         default=False,
         help="also create a bids compliant participants file",
     )
+    parser.add_argument(
+        "--max-participants",
+        default=float("inf"),
+        type=float,
+        help="maximum number of participants to download (helpful for testing)",
+    )
 
     args = parser.parse_args()
     if args.max_workers > 20:
@@ -121,6 +147,7 @@ def main():
             max_workers=args.max_workers,
             do_participants=args.do_participants,
             super_dataset=super_dataset,
+            max_participants=args.max_participants,
         )
     )
 
