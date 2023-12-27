@@ -91,11 +91,14 @@ async def flow(
                 break
 
     if do_participants:
-        d.rename({"eid": "participant_label"}).with_columns(
+        d.with_columns(
             participant_label=pl.concat_str(
-                pl.Series(["sub-"]), pl.col("participant_label")
-            )
-        ).write_csv(dst / "participants.tsv", separator="\t", null_value="n/a")
+                pl.Series(["sub-"]), pl.col("eid")
+            ),
+            fields=pl.col("value").list.join(separator=","),
+        ).drop(["eid", "value"]).write_csv(
+            dst / "participants.tsv", separator="\t", null_value="n/a"
+        )
 
 
 def main():
