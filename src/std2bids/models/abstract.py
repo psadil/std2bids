@@ -102,11 +102,6 @@ class Participant(pydantic.BaseModel, abc.ABC):
         self.repo.checkout(self.branch_incoming)
         self.checkout_or_create(self.branch_native)
 
-        # If nothing has been added, then just shortcut this method
-        if self.shortcut():
-            self.repo.checkout(old_branch)
-            return
-
         # main work
         self._raw_to_native()
 
@@ -118,30 +113,11 @@ class Participant(pydantic.BaseModel, abc.ABC):
     def _native_to_bids(self):
         raise NotImplementedError
 
-    def shortcut(self) -> bool:
-        """Check whether anything has changed in the dataset.
-
-        Returns:
-            bool: Whether everything in the dataset has clean state.
-        """
-        result = all(
-            status.get("state", "unkown") == "clean"
-            for status in self.repo.status().values()
-        )
-        if result:
-            logging.info(f"Skipping action on branch {self.active_branch}")
-        return result
-
     async def convert_native_to_bids(self):
         old_branch = self.active_branch
 
         self.repo.checkout(self.branch_native)
         self.checkout_or_create(self.branch_bids)
-
-        # If nothing has been added, then just shortcut this method
-        if self.shortcut():
-            self.repo.checkout(old_branch)
-            return
 
         # main work
         self._native_to_bids()
