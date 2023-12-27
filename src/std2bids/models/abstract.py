@@ -1,5 +1,6 @@
 import abc
 import functools
+import logging
 import typing
 from pathlib import Path
 
@@ -123,10 +124,13 @@ class Participant(pydantic.BaseModel, abc.ABC):
         Returns:
             bool: Whether everything in the dataset has clean state.
         """
-        return all(
+        result = all(
             status.get("state", "unkown") == "clean"
             for status in self.repo.status().values()
         )
+        if result:
+            logging.info(f"Skipping action on branch {self.active_branch}")
+        return result
 
     async def convert_native_to_bids(self):
         old_branch = self.active_branch
