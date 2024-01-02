@@ -58,6 +58,7 @@ async def flow(
     do_participants: bool = True,
     super_dataset: dapi.Dataset | None = None,
     max_participants: float = float("inf"),
+    shortcut: bool = False,
 ):
     """Main workflow
 
@@ -68,6 +69,8 @@ async def flow(
         max_workers (int, optional): _description_. Defaults to 1.
         do_participants (bool, optional): _description_. Defaults to True.
         super_dataset (dapi.Dataset | None, optional): _description_. Defaults to None.
+        super_dataset (int): _description_. Defaults to 1.
+        shortcut (bool, optional): _description_. Defaults to False.
     """
     d = get_ukb(bulk)
     datafields = get_bulk(d)
@@ -75,17 +78,20 @@ async def flow(
 
     async with asyncio.TaskGroup() as tg:
         for i, (eid, eid_datafields) in enumerate(datafields.items()):
-            logging.info(f"starting {i=}")
-            participant = await tg.create_task(
-                ukb_models.UKBParticipant.from_dst(
-                    dst=dst,
-                    label=str(eid),
-                    raw_getter=fetcher,
-                    datafields=eid_datafields,
-                    super_dataset=super_dataset,
+            if (dst / f"sub-{eid}").exists() and shortcut:
+                logging.warning(f"shortcutting {i=}, {eid=}")
+            else:
+                logging.info(f"starting {i=}, {eid=}")
+                participant = await tg.create_task(
+                    ukb_models.UKBParticipant.from_dst(
+                        dst=dst,
+                        label=str(eid),
+                        raw_getter=fetcher,
+                        datafields=eid_datafields,
+                        super_dataset=super_dataset,
+                    )
                 )
-            )
-            tg.create_task(participant.do())
+                tg.create_task(participant.do())
 
             if i >= max_participants:
                 break
@@ -128,6 +134,12 @@ def main():
         type=float,
         help="maximum number of participants to download (helpful for testing)",
     )
+    parser.add_argument(
+        "--shortcut",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="whether to skip entirely participants that already have a directory",
+    )
 
     args = parser.parse_args()
     if args.max_workers > 20:
@@ -151,6 +163,7 @@ def main():
             do_participants=args.do_participants,
             super_dataset=super_dataset,
             max_participants=args.max_participants,
+            shortcut=args.shortcut,
         )
     )
 
