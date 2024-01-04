@@ -1,14 +1,12 @@
 import asyncio
 import datetime
 import logging
-import shutil
 import tempfile
 import typing
 from pathlib import Path
 
 import pydantic
 from datalad import api as dapi
-from datalad.core.local import create
 from reorganizer import convert
 from reorganizer.data import ukb
 
@@ -68,16 +66,6 @@ Field: typing.TypeAlias = typing.Literal[
 Instance: typing.TypeAlias = typing.Literal[2, 3]
 
 
-def get_or_create_dataset(
-    dst: Path, dataset: dapi.Dataset | Path | None = None
-) -> dapi.Dataset:
-    ds = dapi.Dataset(dst)
-    if not ds.is_installed():
-        ds = create.Create()(path=dst, dataset=dataset)
-
-    return ds
-
-
 class UKBFetcher(abstract.Fetcher):
     max_workers: int = pydantic.Field(ge=1, le=20, default=1)
     key: pydantic.FilePath
@@ -86,31 +74,32 @@ class UKBFetcher(abstract.Fetcher):
     def model_post_init(self, _):
         self._semaphore = asyncio.BoundedSemaphore(self.max_workers)
 
-    async def fetch(self, bulkfile: Path, dst: Path) -> tuple[Path, Path]:
+    @property
+    def semaphore(self) -> asyncio.BoundedSemaphore:
         if not self._semaphore:
             msg = "something wrong with init"
             raise ValueError(msg)
+        return self._semaphore
 
-        async with self._semaphore:
-            with tempfile.TemporaryDirectory() as tmpd:
-                proc = await asyncio.create_subprocess_exec(
-                    "ukbfetch",
-                    f"-a{self.key}",
-                    f"-b{bulkfile}",
-                    stderr=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    cwd=tmpd,
-                )
+    async def fetch(self, bulkfile: Path, dst: Path) -> tuple[Path, Path]:
+        async with self.semaphore:
+            proc = await asyncio.create_subprocess_exec(
+                "ukbfetch",
+                f"-a{self.key}",
+                f"-b{bulkfile}",
+                stderr=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                cwd=dst,
+            )
 
-                stdout, stderr = await proc.communicate()
-                shutil.copytree(tmpd, dst, dirs_exist_ok=True)
+            stdout, stderr = await proc.communicate()
 
-                # replacements are for Windows path requirements
-                now = datetime.datetime.now().isoformat().replace(":", "-")
-                stderr_file = dst / f"{now}.stderr"
-                stdout_file = dst / f"{now}.stderr"
-                stderr_file.write_bytes(stderr)
-                stdout_file.write_bytes(stdout)
+            # replacements are for Windows path requirements
+            now = datetime.datetime.now().isoformat().replace(":", "-")
+            stderr_file = dst / f"{now}.stderr"
+            stdout_file = dst / f"{now}.stderr"
+            stderr_file.write_bytes(stderr)
+            stdout_file.write_bytes(stdout)
 
             return stderr_file, stdout_file
 
@@ -234,8 +223,10 @@ class UKBParticipant(abstract.Participant):
         datafields: list[DataField],
         super_dataset: dapi.Dataset | None = None,
     ):
-        subid_dir = dst / f"sub-{label}"
-        ds = get_or_create_dataset(subid_dir, dataset=super_dataset)
         return cls(
-            label=label, ds=ds, raw_getter=raw_getter, datafields=datafields
+            label=label,
+            dst=dst / f"sub-{label}",
+            raw_getter=raw_getter,
+            datafields=datafields,
+            super_dataset=super_dataset,
         )

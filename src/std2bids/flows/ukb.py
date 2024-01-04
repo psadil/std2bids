@@ -5,8 +5,8 @@ import typing
 from pathlib import Path
 
 import polars as pl
-import polars.selectors as s
 from datalad import api as dapi
+from polars import selectors as s
 
 from std2bids.models import ukb as ukb_models
 

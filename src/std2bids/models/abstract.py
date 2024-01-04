@@ -1,14 +1,28 @@
 import abc
-import functools
-import logging
+import shutil
 import typing
 from pathlib import Path
 
 import pydantic
 from datalad import api as dapi
-from datalad.support import annexrepo, gitrepo
+from datalad.core.distributed import clone
+from datalad.core.local import create
+from datalad.distribution import siblings
+from datalad.support import annexrepo
 
-Repo: typing.TypeAlias = gitrepo.GitRepo | annexrepo.AnnexRepo
+from std2bids import utils
+
+
+def get_or_create_dataset(
+    dst: Path, dataset: dapi.Dataset | Path | None = None
+) -> dapi.Dataset:
+    ds = dapi.Dataset(dst)
+    if not ds.is_installed():
+        ds = create.Create()(
+            path=dst, dataset=dataset, initopts=["--shared=group"]
+        )
+
+    return ds
 
 
 class Fetcher(pydantic.BaseModel, abc.ABC):
@@ -24,19 +38,39 @@ class Participant(pydantic.BaseModel, abc.ABC):
 
     label: str
     raw_getter: Fetcher
-    ds: dapi.Dataset
+
+    # location for the dataset when finalized
+    dst: Path
+
+    # temporary location of the dataset when building
+    _ds: dapi.Dataset | None = None
+    _path: utils.TempDir = pydantic.PrivateAttr(
+        default_factory=lambda: utils.TempDir()
+    )
+
+    super_dataset: dapi.Dataset | None = None
 
     branch_incoming: str = "incoming"
     branch_native: str = "incoming-native"
     branch_bids: str = "bids"
     branch_main: str = "main"
 
-    @functools.cached_property
-    def path(self) -> Path:
-        return Path(self.ds.path)
+    def model_post_init(self, _):
+        self._ds = get_or_create_dataset(self._path.path)
 
-    @functools.cached_property
-    def repo(self) -> Repo:
+    @property
+    def ds(self) -> dapi.Dataset:
+        if not self._ds:
+            msg = "something wrong with init of ds"
+            raise ValueError(msg)
+        return self._ds
+
+    @property
+    def path(self) -> Path:
+        return self._path.path
+
+    @property
+    def repo(self) -> annexrepo.AnnexRepo:
         """Get repo associated with the ds (dataset) field
 
         Returns:
@@ -48,6 +82,9 @@ class Participant(pydantic.BaseModel, abc.ABC):
         """
         if not self.ds.repo:
             msg = "something very strange with init"
+            raise ValueError(msg)
+        if not isinstance(self.ds.repo, annexrepo.AnnexRepo):
+            msg = "Expected AnnexRepo"
             raise ValueError(msg)
         return self.ds.repo
 
@@ -76,6 +113,46 @@ class Participant(pydantic.BaseModel, abc.ABC):
 
         # reorganize
         await self.convert_native_to_bids()
+
+        # install in final location
+        await self.finalize()
+
+    async def finalize(self) -> None:
+        if self.super_dataset:
+            remote = f"tmp-{self.repo.uuid}"
+            # need to use clone instead of install to allow use of git_clone_opts
+            clone.Clone()(
+                source=f"file://{self.path.absolute()}",
+                path=self.dst,
+                dataset=self.super_dataset,
+                git_clone_opts=["--origin", f"{remote}"],
+            )
+            ds = dapi.Dataset(self.dst)
+            if not isinstance(ds.repo, annexrepo.AnnexRepo):
+                raise ValueError
+            # fetch additional branches
+            ds.repo._call_annex(["pull", "--all", remote], cwd=ds.repo.path)
+            # ensure all branches present
+            for branch in [
+                self.branch_bids,
+                self.branch_incoming,
+                self.branch_native,
+            ]:
+                ds.repo.checkout(branch)
+            ds.repo.checkout(self.branch_main)
+
+            # pulling creates this weird extra branch
+            ds.repo.remove_branch(f"synced/{self.branch_main}")
+
+            # get.Get()(path=self.dst, dataset=self.super_dataset)
+
+            # the earlier copy was only temporary, so forget it
+            # need to use private method _call_annex to get cwd
+            # the regular set_remote_dead operates in PWD
+            ds.repo._call_annex(["dead", remote], cwd=ds.repo.path)
+            siblings.Siblings()(dataset=ds, name=remote, action="remove")
+        else:
+            shutil.move(self.path, self.dst)
 
     def checkout_or_create(self, branch: str):
         """Checkout branch, or create if it doesn't exist.
