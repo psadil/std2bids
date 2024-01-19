@@ -1,6 +1,6 @@
-import asyncio
 import datetime
 import logging
+import subprocess
 import tempfile
 import typing
 from pathlib import Path
@@ -67,41 +67,24 @@ Instance: typing.TypeAlias = typing.Literal[2, 3]
 
 
 class UKBFetcher(abstract.Fetcher):
-    max_workers: int = pydantic.Field(ge=1, le=20, default=1)
     key: pydantic.FilePath
-    _semaphore: asyncio.BoundedSemaphore | None = None
 
-    def model_post_init(self, _):
-        self._semaphore = asyncio.BoundedSemaphore(self.max_workers)
+    def fetch(self, bulkfile: Path, dst: Path) -> tuple[Path, Path]:
+        proc = subprocess.run(
+            ["ukbfetch", f"-a{self.key}", f"-b{bulkfile}"],
+            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            cwd=dst,
+        )
 
-    @property
-    def semaphore(self) -> asyncio.BoundedSemaphore:
-        if not self._semaphore:
-            msg = "something wrong with init"
-            raise ValueError(msg)
-        return self._semaphore
+        # replacements are for Windows path requirements
+        now = datetime.datetime.now().isoformat().replace(":", "-")
+        stderr_file = dst / f"{now}.stderr"
+        stdout_file = dst / f"{now}.stderr"
+        stderr_file.write_bytes(proc.stderr)
+        stdout_file.write_bytes(proc.stderr)
 
-    async def fetch(self, bulkfile: Path, dst: Path) -> tuple[Path, Path]:
-        async with self.semaphore:
-            proc = await asyncio.create_subprocess_exec(
-                "ukbfetch",
-                f"-a{self.key}",
-                f"-b{bulkfile}",
-                stderr=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                cwd=dst,
-            )
-
-            stdout, stderr = await proc.communicate()
-
-            # replacements are for Windows path requirements
-            now = datetime.datetime.now().isoformat().replace(":", "-")
-            stderr_file = dst / f"{now}.stderr"
-            stdout_file = dst / f"{now}.stderr"
-            stderr_file.write_bytes(stderr)
-            stdout_file.write_bytes(stdout)
-
-            return stderr_file, stdout_file
+        return stderr_file, stdout_file
 
 
 class DataField(pydantic.BaseModel):
@@ -140,7 +123,7 @@ class DataField(pydantic.BaseModel):
 class UKBParticipant(abstract.Participant):
     datafields: list[DataField]
 
-    async def get_raw(self):
+    def get_raw(self):
         old_branch = self.active_branch
         self.checkout_or_create(self.branch_incoming)
 
@@ -164,9 +147,7 @@ class UKBParticipant(abstract.Participant):
                 tmpf.write_text("\n".join(bulklist))
 
                 logging.info(f"starting eid: {self.label}")
-                stdout, stderr = await self.raw_getter.fetch(
-                    tmpf, dst=subid_dir
-                )
+                stdout, stderr = self.raw_getter.fetch(tmpf, dst=subid_dir)
 
                 ukbatch = subid_dir / ".ukbbatch"
                 if ukbatch.exists():
@@ -215,7 +196,7 @@ class UKBParticipant(abstract.Participant):
         )
 
     @classmethod
-    async def from_dst(
+    def from_dst(
         cls,
         dst: Path,
         label: str,

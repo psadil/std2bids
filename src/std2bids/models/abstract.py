@@ -27,7 +27,7 @@ def get_or_create_dataset(
 
 class Fetcher(pydantic.BaseModel, abc.ABC):
     @abc.abstractmethod
-    async def fetch(self, *args, **kwargs) -> typing.Any:
+    def fetch(self, *args, **kwargs) -> typing.Any:
         raise NotImplementedError
 
 
@@ -104,20 +104,20 @@ class Participant(pydantic.BaseModel, abc.ABC):
             raise ValueError(msg)
         return old_branch
 
-    async def do(self):
+    def do(self):
         # download
-        await self.get_raw()
+        self.get_raw()
 
         # unpack
-        await self.convert_raw_to_native()
+        self.convert_raw_to_native()
 
         # reorganize
-        await self.convert_native_to_bids()
+        self.convert_native_to_bids()
 
         # install in final location
-        await self.finalize()
+        self.finalize()
 
-    async def finalize(self) -> None:
+    def finalize(self) -> None:
         if self.super_dataset:
             remote = f"tmp-{self.repo.uuid}"
             # need to use clone instead of install to allow use of git_clone_opts
@@ -167,14 +167,14 @@ class Participant(pydantic.BaseModel, abc.ABC):
         self.repo.checkout(branch, options=options)
 
     @abc.abstractmethod
-    async def get_raw(self, *args, **kwargs):
+    def get_raw(self, *args, **kwargs):
         raise NotImplementedError
 
     @abc.abstractmethod
     def _raw_to_native(self):
         raise NotImplementedError
 
-    async def convert_raw_to_native(self):
+    def convert_raw_to_native(self):
         old_branch = self.active_branch
         self.repo.checkout(self.branch_incoming)
         self.checkout_or_create(self.branch_native)
@@ -190,7 +190,7 @@ class Participant(pydantic.BaseModel, abc.ABC):
     def _native_to_bids(self):
         raise NotImplementedError
 
-    async def convert_native_to_bids(self):
+    def convert_native_to_bids(self):
         old_branch = self.active_branch
 
         self.repo.checkout(self.branch_native)

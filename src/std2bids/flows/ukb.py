@@ -1,10 +1,11 @@
 import argparse
-import asyncio
 import logging
 import typing
+from concurrent import futures
 from pathlib import Path
 
 import polars as pl
+import pydantic
 from datalad import api as dapi
 from polars import selectors as s
 
@@ -50,13 +51,41 @@ def get_ukb(ukb: Path) -> pl.DataFrame:
     return d
 
 
-async def flow(
+class JobDef(pydantic.BaseModel):
+    dst: Path
+    key: pydantic.FilePath
+    eid: str
+    eid_datafields: list[ukb_models.DataField]
+    super_dataset: Path | None = None
+
+
+def do(jobdef: JobDef) -> None:
+    if jobdef.super_dataset:
+        super_dataset = dapi.Dataset(jobdef.super_dataset)
+        if not super_dataset.is_installed():
+            msg = "The superdataset must already be installed."
+            raise ValueError(msg)
+    else:
+        super_dataset = None
+
+    fetcher = ukb_models.UKBFetcher(key=jobdef.key)
+    participant = ukb_models.UKBParticipant.from_dst(
+        dst=jobdef.dst,
+        label=str(jobdef.eid),
+        raw_getter=fetcher,
+        datafields=jobdef.eid_datafields,
+        super_dataset=super_dataset,
+    )
+    participant.do()
+
+
+def flow(
     bulk: Path,
     dst: Path,
     key: Path,
     max_workers: int = 1,
     do_participants: bool = True,
-    super_dataset: dapi.Dataset | None = None,
+    super_dataset: Path | None = None,
     max_participants: float = float("inf"),
     shortcut: bool = False,
 ):
@@ -74,27 +103,28 @@ async def flow(
     """
     d = get_ukb(bulk)
     datafields = get_bulk(d)
-    fetcher = ukb_models.UKBFetcher(max_workers=max_workers, key=key)
 
-    async with asyncio.TaskGroup() as tg:
-        for i, (eid, eid_datafields) in enumerate(datafields.items()):
-            if (dst / f"sub-{eid}").exists() and shortcut:
-                logging.warning(f"shortcutting {i=}, {eid=}")
-            else:
-                logging.info(f"starting {i=}, {eid=}")
-                participant = await tg.create_task(
-                    ukb_models.UKBParticipant.from_dst(
-                        dst=dst,
-                        label=str(eid),
-                        raw_getter=fetcher,
-                        datafields=eid_datafields,
-                        super_dataset=super_dataset,
-                    )
+    jobdefs = []
+    for i, (eid, eid_datafields) in enumerate(datafields.items()):
+        if (dst / f"sub-{eid}").exists() and shortcut:
+            logging.warning(f"shortcutting {i=}, {eid=}")
+        else:
+            logging.info(f"starting {i=}, {eid=}")
+            jobdefs.append(
+                JobDef(
+                    dst=dst,
+                    key=key,
+                    eid=str(eid),
+                    eid_datafields=eid_datafields,
+                    super_dataset=super_dataset,
                 )
-                tg.create_task(participant.do())
+            )
 
-            if i >= max_participants:
-                break
+        if i >= max_participants:
+            break
+
+    with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        executor.map(do, jobdefs)
 
     if do_participants:
         d.with_columns(
@@ -151,20 +181,16 @@ def main():
         if not super_dataset.is_installed():
             msg = "The superdataset must already be installed."
             raise ValueError(msg)
-    else:
-        super_dataset = None
 
-    asyncio.run(
-        flow(
-            bulk=args.bulk,
-            dst=args.destination,
-            key=args.key,
-            max_workers=args.max_workers,
-            do_participants=args.do_participants,
-            super_dataset=super_dataset,
-            max_participants=args.max_participants,
-            shortcut=args.shortcut,
-        )
+    flow(
+        bulk=args.bulk,
+        dst=args.destination,
+        key=args.key,
+        max_workers=args.max_workers,
+        do_participants=args.do_participants,
+        super_dataset=args.super_dataset,
+        max_participants=args.max_participants,
+        shortcut=args.shortcut,
     )
 
 
